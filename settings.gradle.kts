@@ -1,0 +1,1 @@
+rootProject.name = "SegY2PNG"
