@@ -14,7 +14,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -59,10 +58,9 @@ public class Main {
     }
 
     public static void main(String... args) {
-        String filePath = args.length > 0 ? args[0] : "./input.segy";
-        float scaleX = args.length > 1 ? Float.parseFloat(args[1]) : 1f;
-        float scaleY = args.length > 2 ? Float.parseFloat(args[2]) : 1f;
+        ArgsOptions.parse(args);
 
+        String filePath = ArgsOptions.INPUT_FILE.getAsString();
         System.out.println("Reading SEGY file: " + filePath);
 
         try (FileInputStream fis = new FileInputStream(filePath)) {
@@ -110,24 +108,29 @@ public class Main {
             System.out.printf("Seismic grid: %d traces (width) x %d samples (height)%n", width, height);
 
             //precompute amplitudes grid and find min/max amplitude for normalization
+            float minAmplitude = ArgsOptions.AMPLITUDE.getAsFloat(0);
+            float maxAmplitude = ArgsOptions.AMPLITUDE.getAsFloat(1);
+            boolean recalculateAmplitude = minAmplitude >= maxAmplitude;
+
             float[][] amplitudes = new float[width][height];
-            float minAmplitude = Float.MAX_VALUE;
-            float maxAmplitude = -Float.MAX_VALUE;
             for (int x = 0; x < width; x++) {
                 float[] values = traces.get(x).getValues();
                 int localHeight = Math.min(height, values.length);
                 for (int y = 0; y < localHeight; y++) {
                     float v = values[y];
                     amplitudes[x][y] = v;
-                    if (v < minAmplitude) minAmplitude = v;
-                    if (v > maxAmplitude) maxAmplitude = v;
+                    if (recalculateAmplitude) {
+                        if (v < minAmplitude) minAmplitude = v;
+                        if (v > maxAmplitude) maxAmplitude = v;
+                    }
                 }
             }
-            float amplitudeRange = maxAmplitude - minAmplitude;
 
             System.out.printf("Data amplitudes range from %.2f to %.2f%n", minAmplitude, maxAmplitude);
 
             //create the image
+            float scaleX = ArgsOptions.SCALE.getAsFloat(0);
+            float scaleY = ArgsOptions.SCALE.getAsFloat(1);
             int scaledWidth = Math.max(1, Math.round(width * scaleX));
             int scaledHeight = Math.max(1, Math.round(height * scaleY));
             float invScaleX = 1f / scaleX;
@@ -155,27 +158,26 @@ public class Main {
 
                     float top = a00 * (1.0f - wx) + a10 * wx;
                     float bottom = a01 * (1.0f - wx) + a11 * wx;
-                    float delta = top * (1.0f - wy) + bottom * wy;
+                    float amplitude = top * (1.0f - wy) + bottom * wy;
 
-                    //normalize interpolated amplitude to [0,1]
-                    float norm = (delta - minAmplitude) / amplitudeRange;
-                    norm = Math.clamp(norm, 0f, 1f);
+                    //map amplitude to [-1,0,+1] where -1 is minAmplitude, 0 is 0, +1 is maxAmplitude
+                    if (amplitude >= 0) {
+                        amplitude = amplitude / maxAmplitude;
+                    } else {
+                        amplitude = -(amplitude / minAmplitude);
+                    }
 
                     //convert to [-1,1] and get the color
-                    Color seismicColor = getSeismicColor(norm * 2.0f - 1.0f);
+                    Color seismicColor = getSeismicColor(amplitude);
                     image.setRGB(x, y, seismicColor.getRGB());
                 }
             }
 
             //write the image to a file
-            Path inputFile = Path.of(filePath);
-            String filename = inputFile.getFileName().toString();
-            String outputName = filename.contains(".") ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+            String out = ArgsOptions.OUTPUT_FILE.getAsString();
+            ImageIO.write(image, "png", new File(out));
 
-            File outputFile = new File("./" + outputName + ".png");
-            ImageIO.write(image, "png", outputFile);
-
-            System.out.println("Successfully converted SEGY file to " + outputFile.getAbsolutePath());
+            System.out.println("Successfully converted SEGY file to " + out);
         } catch (Exception e) {
             e.printStackTrace();
         }
